@@ -1,107 +1,144 @@
-// --- 定数定義 ---
-// (変更なし)
-const GRID_DIVISIONS = 11;
+// --- Constants ---
+const GRID_DIVISIONS = 10;
 const CELL_SIZE = 35;
-const DOT_RADIUS = CELL_SIZE * 0.42;
-const STONE_COLOR = [35, 35, 35, 255];
+const DOT_RADIUS = CELL_SIZE * 0.42; // Target display size for the stone image
 
 const CANVAS_WIDTH = GRID_DIVISIONS * CELL_SIZE + CELL_SIZE;
-const CANVAS_HEIGHT = GRID_DIVISIONS * CELL_SIZE + CELL_SIZE; // ボタンエリア分を考慮して少し広げることも可能
+const CANVAS_HEIGHT = GRID_DIVISIONS * CELL_SIZE + CELL_SIZE;
 const DRAW_OFFSET = CELL_SIZE / 2;
 
-// 確認ボタン用の定数
-const CONFIRM_BUTTON_HEIGHT = CELL_SIZE * 1.2;
-const CONFIRM_BUTTON_WIDTH = CELL_SIZE * 3;
-const CONFIRM_BUTTON_PADDING = 10; // ボタン間の余白
+const ACTION_BUTTON_HEIGHT = CELL_SIZE * 1.25;
+const ACTION_BUTTON_WIDTH = CELL_SIZE * 3.8;
+const ACTION_BUTTON_PADDING = 12;
 
-// --- グローバル変数 ---
-// (既存の変数)
+// --- Global Variables ---
 let placedStones = [];
 let currentPlayer = 1;
-let playerNames = { 1: "プレイヤー1", 2: "プレイヤー2" };
+let playerNames = { 1: "Player 1", 2: "Player 2" };
 let gameOver = false;
+let gameOverReason = null;
 let highlightedStones = [];
 let conicPath = null;
 let resetButton;
 let inputPlayer1Name, inputPlayer2Name;
 let canvasInstance;
 
-// ★ 新しいグローバル変数
-let gameState = 'placing'; // 'placing' (配置選択中), 'confirming' (配置確認中)
-let previewStone = null;   // {x: gridX, y: gridY} 仮置きする石の格子座標
-let okButton, cancelButton; // 確認ボタンの当たり判定用オブジェクト
+let gameState = 'SELECTING_SPOT';
+let previewStone = null;
+let placementOkButton, placementCancelButton;
+let challengeButtonContainerElement;
+let challengeButtonImgElement;
+
+let challengeRuleCheckbox;
+let challengeRuleActive = false;
+let lastPlacedStoneForChallenge = null;
+
+let stoneDisplayImage; // Variable to hold the loaded stone image
 
 // ------------------------------------
-// p5.js のライフサイクル関数
+// p5.js Lifecycle Functions
 // ------------------------------------
+function preload() {
+    console.log("Preload started...");
+    // ★★★ IMPORTANT: Replace 'stone.png' with the EXACT filename of YOUR stone image.
+    // Ensure this image file is in the SAME FOLDER as index.html and sketch.js.
+    // Example: If your image is IMG_0161.PNG, use loadImage('IMG_0161.PNG');
+    stoneDisplayImage = loadImage(
+        'stone.png', 
+        () => {
+            console.log("SUCCESS: Stone image ('stone.png') loaded successfully!");
+        }, 
+        (errEvent) => {
+            console.error("ERROR: Failed to load stone image ('stone.png').");
+            console.error("Ensure the file exists in the same folder as index.html and sketch.js.");
+            console.error("Ensure you are running this via a LOCAL HTTP SERVER (e.g., VS Code Live Server), not by opening index.html directly as a file (file:///...).");
+            console.error("Actual error event:", errEvent);
+            alert("CRITICAL ERROR: Could not load the stone image ('stone.png').\n\nPlease check:\n1. The filename is EXACTLY 'stone.png' (or update in sketch.js).\n2. The file 'stone.png' is in the SAME FOLDER as index.html.\n3. You are running this game using a LOCAL WEB SERVER (e.g., 'Open with Live Server' in VSCode).\n\nThe game board cannot be displayed correctly without the stone image.");
+        }
+    );
+    console.log("Preload finished.");
+}
+
 function setup() {
-    // キャンバスの高さをボタン分だけ少し広げる場合
-    // createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT + CONFIRM_BUTTON_HEIGHT + CONFIRM_BUTTON_PADDING * 2);
-    // 今回は、ボタンはグリッドエリアの外、下部に描画することを目指し、
-    // キャンバスサイズは一旦そのままにして、ボタンがグリッドと重ならないようにY座標を調整します。
-    // もしボタンをグリッドの下に完全に分離したいなら、CANVAS_HEIGHTを増やす必要があります。
+    console.log("Setup started...");
     canvasInstance = createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
-    let controlsDiv = select('.controls');
-    if (controlsDiv) {
-        canvasInstance.parent(controlsDiv.elt.parentNode, controlsDiv.elt.nextSibling);
+    let canvasContainer = select('#canvas-container');
+    if (canvasContainer) {
+        canvasInstance.parent('canvas-container');
+        console.log("Canvas parented to #canvas-container.");
+    } else {
+        console.error("#canvas-container div not found in HTML! Canvas will be appended to body.");
     }
 
-    textFont('Inter, Noto Sans JP, sans-serif');
+    textFont('Inter, Roboto, sans-serif');
+    
     resetButton = select('#resetButton');
-    resetButton.mousePressed(resetGame);
+    if(resetButton) {
+        resetButton.mousePressed(resetGame);
+    } else {
+        console.error("Reset button not found in HTML.");
+    }
+
     inputPlayer1Name = select('#player1NameInput');
     inputPlayer2Name = select('#player2NameInput');
-    inputPlayer1Name.input(updatePlayerNames);
-    inputPlayer2Name.input(updatePlayerNames);
+    if(inputPlayer1Name) inputPlayer1Name.input(updatePlayerNames); else console.error("Player 1 name input not found.");
+    if(inputPlayer2Name) inputPlayer2Name.input(updatePlayerNames); else console.error("Player 2 name input not found.");
 
-    // 確認ボタンの定義 (位置はdraw内で動的に決めることも、固定にすることも可能)
-    // 今回は盤面の下部中央に固定で表示
-    const buttonY = GRID_DIVISIONS * CELL_SIZE + DRAW_OFFSET + CONFIRM_BUTTON_PADDING + CONFIRM_BUTTON_HEIGHT / 2;
-    // ただし、このY座標はtranslate後の座標系。実際の描画は translate(-DRAW_OFFSET, -DRAW_OFFSET) 後に。
-    // もっと簡単なのは、キャンバスの下端を基準にする。
-    // 画面下部にボタンを配置
-    const totalButtonWidth = CONFIRM_BUTTON_WIDTH * 2 + CONFIRM_BUTTON_PADDING;
-    const buttonStartX = (width - totalButtonWidth) / 2; // キャンバス全体の幅基準
+    challengeRuleCheckbox = select('#challengeRuleCheckbox');
+    if(challengeRuleCheckbox) {
+        challengeRuleCheckbox.changed(() => {
+            challengeRuleActive = challengeRuleCheckbox.checked();
+            resetGame();
+        });
+        challengeRuleActive = challengeRuleCheckbox.checked(); // Initialize from checkbox state
+    } else {
+        console.error("Challenge rule checkbox not found.");
+    }
 
-    okButton = {
-        x: buttonStartX,
-        y: height - CONFIRM_BUTTON_HEIGHT - CONFIRM_BUTTON_PADDING, // キャンバス下端基準
-        w: CONFIRM_BUTTON_WIDTH,
-        h: CONFIRM_BUTTON_HEIGHT,
-        label: "置く"
-    };
-    cancelButton = {
-        x: buttonStartX + CONFIRM_BUTTON_WIDTH + CONFIRM_BUTTON_PADDING,
-        y: height - CONFIRM_BUTTON_HEIGHT - CONFIRM_BUTTON_PADDING, // キャンバス下端基準
-        w: CONFIRM_BUTTON_WIDTH,
-        h: CONFIRM_BUTTON_HEIGHT,
-        label: "やめる"
-    };
+    // Define placement confirmation buttons (drawn on canvas)
+    const buttonYPos = height - ACTION_BUTTON_HEIGHT - ACTION_BUTTON_PADDING;
+    const totalPlacementButtonWidth = ACTION_BUTTON_WIDTH * 2 + ACTION_BUTTON_PADDING;
+    const placementButtonStartX = (width - totalPlacementButtonWidth) / 2;
+    placementOkButton = { x: placementButtonStartX, y: buttonYPos, w: ACTION_BUTTON_WIDTH, h: ACTION_BUTTON_HEIGHT, label: "Place" };
+    placementCancelButton = { x: placementButtonStartX + ACTION_BUTTON_WIDTH + ACTION_BUTTON_PADDING, y: buttonYPos, w: ACTION_BUTTON_WIDTH, h: ACTION_BUTTON_HEIGHT, label: "Cancel" };
 
+    // Get HTML Challenge Button
+    challengeButtonContainerElement = select('#challengeButtonContainer');
+    challengeButtonImgElement = select('#challengeButtonImg');
+    if (challengeButtonImgElement) {
+        challengeButtonImgElement.mousePressed(resolveChallenge);
+    } else {
+        console.error("Challenge button image element not found.");
+    }
 
     textAlign(CENTER, CENTER);
-    updatePlayerNames();
-    resetGame();
+    imageMode(CENTER); // Draw images from their center point
+    
+    updatePlayerNames(); // Initialize player names from input fields
+    resetGame(); // Initialize game state
+    console.log("Setup finished.");
 }
 
 function draw() {
-    background(238, 241, 245);
+    // console.log("Draw loop running, gameState:", gameState); // Uncomment for intense debugging
+    background(238, 241, 245); 
     
-    push(); // グリッドと石のための描画コンテキスト
+    push(); // For board drawing context
     translate(DRAW_OFFSET, DRAW_OFFSET);
     drawGrid();
-    if (gameOver && conicPath) {
-        drawConicPath();
-    }
+    if (gameOver && conicPath) drawConicPath();
     drawStones();
-    if (gameState === 'confirming' && previewStone) {
-        drawPreviewStone();
-    }
-    pop(); // グリッドと石の描画コンテキストを終了
+    if (gameState === 'CONFIRMING_SPOT' && previewStone) drawPreviewStone();
+    pop(); // End board drawing context
 
-    // 確認ボタンは translate の影響を受けないキャンバス座標で描画
-    if (gameState === 'confirming') {
-        drawConfirmButtons();
+    // Draw canvas buttons or show/hide HTML challenge button
+    if (gameState === 'CONFIRMING_SPOT' && previewStone) {
+        drawPlacementConfirmButtons();
+        if (challengeButtonContainerElement) challengeButtonContainerElement.style('display', 'none');
+    } else if (gameState === 'AWAITING_CHALLENGE' && challengeRuleActive) {
+        if (challengeButtonContainerElement) challengeButtonContainerElement.style('display', 'flex');
+    } else {
+        if (challengeButtonContainerElement) challengeButtonContainerElement.style('display', 'none');
     }
     
     updateMessageDisplay();
@@ -110,358 +147,314 @@ function draw() {
 function mousePressed() {
     if (gameOver) return;
 
-    if (gameState === 'placing') {
-        // 石の配置選択
-        // マウス座標がキャンバス内かチェック (translate前の座標で)
-        if (mouseX < DRAW_OFFSET || mouseX > CANVAS_WIDTH - DRAW_OFFSET || 
-            mouseY < DRAW_OFFSET || mouseY > CANVAS_HEIGHT - DRAW_OFFSET) {
-            // グリッドエリア外のクリックは何もしない (ボタンエリアは除く)
-            // ただし、確認ボタンがないときは何もしない
-            return;
+    // Handle clicks on canvas-drawn placement confirmation buttons
+    if (gameState === 'CONFIRMING_SPOT' && previewStone) {
+        if (isButtonClicked(placementOkButton, mouseX, mouseY)) { 
+            handleStonePlacementConfirmed(previewStone); 
+            return; 
         }
+        if (isButtonClicked(placementCancelButton, mouseX, mouseY)) { 
+            previewStone = null; 
+            gameState = 'SELECTING_SPOT'; 
+            return; 
+        }
+    }
+    // HTML Challenge button's click is handled by its own .mousePressed(resolveChallenge) in setup.
 
+    // Handle board clicks for placing stones or skipping challenge
+    if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) {
+        // Click was outside canvas bounds, ignore unless it was a button
+        return;
+    }
+    
+    let inGridArea = mouseX >= DRAW_OFFSET && mouseX <= CANVAS_WIDTH - DRAW_OFFSET &&
+                     mouseY >= DRAW_OFFSET && mouseY <= CANVAS_HEIGHT - DRAW_OFFSET;
+
+    if (inGridArea) {
         let boardMouseX = mouseX - DRAW_OFFSET;
         let boardMouseY = mouseY - DRAW_OFFSET;
         let gridX = Math.round(boardMouseX / CELL_SIZE);
         let gridY = Math.round(boardMouseY / CELL_SIZE);
 
-        if (gridX >= 0 && gridX <= GRID_DIVISIONS &&
-            gridY >= 0 && gridY <= GRID_DIVISIONS) {
+        if (gridX < 0 || gridX > GRID_DIVISIONS || gridY < 0 || gridY > GRID_DIVISIONS) return;
+
+        if (gameState === 'SELECTING_SPOT' || gameState === 'AWAITING_CHALLENGE') {
+            if (!isStoneAt(gridX, gridY)) {
+                if (gameState === 'AWAITING_CHALLENGE') {
+                    lastPlacedStoneForChallenge = null; // Player chose to place a stone, so challenge is skipped
+                }
+                previewStone = { x: gridX, y: gridY };
+                gameState = 'CONFIRMING_SPOT';
+            }
+        } else if (gameState === 'CONFIRMING_SPOT') {
+            // If already confirming, and click on another valid empty spot, change preview
             if (!isStoneAt(gridX, gridY)) {
                 previewStone = { x: gridX, y: gridY };
-                gameState = 'confirming';
-            }
-        }
-    } else if (gameState === 'confirming') {
-        // 確認ボタンのクリック判定 (translate前の座標で)
-        if (isButtonClicked(okButton, mouseX, mouseY)) {
-            placeStoneAtPreviewLocation(); // 石を正式に配置
-            gameState = 'placing';
-            previewStone = null;
-        } else if (isButtonClicked(cancelButton, mouseX, mouseY)) {
-            gameState = 'placing';
-            previewStone = null;
-        } else {
-            // ボタン以外の場所をクリックした場合、新しい仮置き場所を選択する
-            // ただし、クリックがグリッドエリア内なら
-            if (mouseX >= DRAW_OFFSET && mouseX <= CANVAS_WIDTH - DRAW_OFFSET && 
-                mouseY >= DRAW_OFFSET && mouseY <= CANVAS_HEIGHT - DRAW_OFFSET) {
-                
-                let boardMouseX = mouseX - DRAW_OFFSET;
-                let boardMouseY = mouseY - DRAW_OFFSET;
-                let gridX = Math.round(boardMouseX / CELL_SIZE);
-                let gridY = Math.round(boardMouseY / CELL_SIZE);
-
-                if (gridX >= 0 && gridX <= GRID_DIVISIONS &&
-                    gridY >= 0 && gridY <= GRID_DIVISIONS) {
-                    if (!isStoneAt(gridX, gridY)) {
-                        previewStone = { x: gridX, y: gridY }; // 新しいプレビュー場所
-                    } else if (gridX === previewStone.x && gridY === previewStone.y) {
-                        // プレビュー中の石を再度クリックしたら確定、という動作も考えられる
-                        // placeStoneAtPreviewLocation();
-                        // gameState = 'placing';
-                        // previewStone = null;
-                    }
-                }
-            } else {
-                 // グリッドエリア外かつボタン外なら何もしない (キャンセルもしない)
-                 // または、ここでキャンセル扱いにする場合は gameState = 'placing'; previewStone = null;
             }
         }
     }
 }
 
 // ------------------------------------
-// 石の配置と確認関連の関数
+// Button Drawing (Placement Buttons Only) & Helper
 // ------------------------------------
-function placeStoneAtPreviewLocation() {
-    if (!previewStone) return;
+function drawPlacementConfirmButtons() {
+    fill(76, 175, 80, 235); noStroke();
+    rect(placementOkButton.x, placementOkButton.y, placementOkButton.w, placementOkButton.h, 8);
+    fill(255); textSize(ACTION_BUTTON_HEIGHT * 0.38); textFont('Inter'); textStyle(BOLD);
+    text(placementOkButton.label, placementOkButton.x + placementOkButton.w / 2, placementOkButton.y + placementOkButton.h / 2);
 
-    const newStone = { x: previewStone.x, y: previewStone.y };
-    placedStones.push(newStone);
-
-    if (placedStones.length >= 4) {
-        const combinations = getCombinations(placedStones, 4);
-        for (const combo of combinations) {
-            if (arePointsConcyclicOrCollinear(combo[0], combo[1], combo[2], combo[3])) {
-                gameOver = true;
-                highlightedStones = [...combo];
-                prepareConicPathToDraw();
-                break;
-            }
-        }
-    }
-
-    if (!gameOver) {
-        if (placedStones.length === (GRID_DIVISIONS + 1) * (GRID_DIVISIONS + 1)) {
-            gameOver = true; // 引き分け
-        } else {
-            currentPlayer = (currentPlayer === 1) ? 2 : 1;
-        }
-    }
+    fill(244, 67, 54, 235); noStroke();
+    rect(placementCancelButton.x, placementCancelButton.y, placementCancelButton.w, placementCancelButton.h, 8);
+    fill(255); 
+    text(placementCancelButton.label, placementCancelButton.x + placementCancelButton.w / 2, placementCancelButton.y + placementCancelButton.h / 2);
+    textStyle(NORMAL);
 }
 
-function drawPreviewStone() {
-    if (!previewStone) return;
-    // 石本体と同じ色だが、アルファ値を下げて半透明にする
-    let previewColor = color(STONE_COLOR[0], STONE_COLOR[1], STONE_COLOR[2], 128); // 半透明
-    fill(previewColor);
-    noStroke();
-    ellipse(
-        previewStone.x * CELL_SIZE,
-        previewStone.y * CELL_SIZE,
-        DOT_RADIUS * 2,
-        DOT_RADIUS * 2
-    );
-}
-
-function drawConfirmButtons() {
-    // OKボタン
-    fill(92, 184, 92, 220); // 緑系
-    noStroke();
-    rect(okButton.x, okButton.y, okButton.w, okButton.h, 5); // 角丸
-    fill(255);
-    textSize(CONFIRM_BUTTON_HEIGHT * 0.4);
-    text(okButton.label, okButton.x + okButton.w / 2, okButton.y + okButton.h / 2);
-
-    // Cancelボタン
-    fill(217, 83, 79, 220); // 赤系
-    noStroke();
-    rect(cancelButton.x, cancelButton.y, cancelButton.w, cancelButton.h, 5); // 角丸
-    fill(255);
-    textSize(CONFIRM_BUTTON_HEIGHT * 0.4);
-    text(cancelButton.label, cancelButton.x + cancelButton.w / 2, cancelButton.y + cancelButton.h / 2);
-}
-
-function isButtonClicked(button, mx, my) {
+function isButtonClicked(button, mx, my) { 
+    if (!button) return false; // Safety check
     return mx >= button.x && mx <= button.x + button.w &&
            my >= button.y && my <= button.y + button.h;
 }
 
 // ------------------------------------
-// 描画関連関数 (既存)
+// Stone Placement and Challenge Logic
 // ------------------------------------
-function drawGrid() { /* ... (変更なし) ... */ 
-    stroke(190, 195, 205);
-    strokeWeight(1);
-    for (let i = 0; i <= GRID_DIVISIONS; i++) {
-        line(i * CELL_SIZE, 0, i * CELL_SIZE, GRID_DIVISIONS * CELL_SIZE);
-        line(0, i * CELL_SIZE, GRID_DIVISIONS * CELL_SIZE, i * CELL_SIZE);
-    }
-    if (GRID_DIVISIONS === 12) {
-      let starPoints = [ {x:3, y:3}, {x:3, y:9}, {x:9, y:3}, {x:9, y:9}, {x:6, y:6} ];
-      fill(170, 175, 185);
-      noStroke();
-      for (const p of starPoints) {
-          ellipse(p.x * CELL_SIZE, p.y * CELL_SIZE, DOT_RADIUS * 0.2, DOT_RADIUS * 0.2);
-      }
-    }
-}
-function drawStones() { /* ... (変更なし、ハイライト含む) ... */ 
-    for (const stone of placedStones) {
-        fill(0, 0, 0, 30);
-        noStroke();
-        ellipse(stone.x * CELL_SIZE + 1.5, stone.y * CELL_SIZE + 1.5, DOT_RADIUS * 2, DOT_RADIUS * 2);
-        fill(STONE_COLOR[0], STONE_COLOR[1], STONE_COLOR[2], STONE_COLOR[3]);
-        fill(255, 255, 255, 50);
-        ellipse(stone.x * CELL_SIZE - DOT_RADIUS * 0.35, stone.y * CELL_SIZE - DOT_RADIUS * 0.35, DOT_RADIUS, DOT_RADIUS);
-        fill(STONE_COLOR[0], STONE_COLOR[1], STONE_COLOR[2], STONE_COLOR[3]);
-        if (gameOver && highlightedStones.some(hs => hs.x === stone.x && hs.y === stone.y)) {
-            stroke(255, 200, 0); 
-            strokeWeight(3);
-        } else {
-            noStroke();
+function handleStonePlacementConfirmed(stoneToPlace) {
+    placedStones.push({...stoneToPlace});
+    lastPlacedStoneForChallenge = {...stoneToPlace};
+    previewStone = null;
+
+    if (challengeRuleActive) {
+        currentPlayer = (currentPlayer === 1) ? 2 : 1;
+        gameState = 'AWAITING_CHALLENGE';
+    } else { // Auto-check mode
+        let concyclicMadeByThisMove = false;
+        if (placedStones.length >= 4) {
+            const combinations = getCombinations(placedStones, 4);
+            for (const combo of combinations) {
+                let newStoneInCombo = combo.some(s => s.x === stoneToPlace.x && s.y === stoneToPlace.y);
+                if (newStoneInCombo && arePointsConcyclicOrCollinear(combo[0], combo[1], combo[2], combo[3])) {
+                    gameOver = true;
+                    gameOverReason = 'auto_concyclic_lose';
+                    highlightedStones = [...combo];
+                    prepareConicPathToDraw();
+                    currentPlayer = (currentPlayer === 1) ? 2 : 1; // Set winner (the other player)
+                    concyclicMadeByThisMove = true;
+                    break;
+                }
+            }
         }
-        ellipse(stone.x * CELL_SIZE, stone.y * CELL_SIZE, DOT_RADIUS * 2, DOT_RADIUS * 2);
+        if (gameOver) { // From concyclic check
+            gameState = 'GAME_OVER';
+        } else {
+            if (placedStones.length === (GRID_DIVISIONS + 1) * (GRID_DIVISIONS + 1)) {
+                gameOver = true;
+                gameOverReason = 'board_full_draw';
+                gameState = 'GAME_OVER';
+            } else {
+                currentPlayer = (currentPlayer === 1) ? 2 : 1;
+                gameState = 'SELECTING_SPOT';
+            }
+        }
     }
-    noStroke();
 }
 
+function resolveChallenge() {
+    if (!lastPlacedStoneForChallenge) { 
+        console.warn("Resolve challenge called without a target stone."); 
+        gameState = 'SELECTING_SPOT'; 
+        if (challengeButtonContainerElement) challengeButtonContainerElement.style('display', 'none');
+        return; 
+    }
+    let challengeSuccessful = false;
+    if (placedStones.length >= 4) {
+        const combinations = getCombinations(placedStones, 4);
+        for (const combo of combinations) {
+            let lastStoneInCombo = combo.some(s => s.x === lastPlacedStoneForChallenge.x && s.y === lastPlacedStoneForChallenge.y);
+            if (lastStoneInCombo && arePointsConcyclicOrCollinear(combo[0], combo[1], combo[2], combo[3])) {
+                challengeSuccessful = true; 
+                highlightedStones = [...combo]; 
+                prepareConicPathToDraw(); 
+                break;
+            }
+        }
+    }
+    gameOver = true; 
+    gameState = 'GAME_OVER';
+    if (challengeSuccessful) {
+        gameOverReason = 'challenge_won';
+        // Challenger (current currentPlayer) wins. currentPlayer already points to the challenger.
+    } else {
+        gameOverReason = 'challenge_failed';
+        // Challenger loses, so the player who placed the stone (opponent of current) wins.
+        currentPlayer = (currentPlayer === 1) ? 2 : 1; // Set winner to the one who placed the stone.
+    }
+    lastPlacedStoneForChallenge = null;
+    if (challengeButtonContainerElement) challengeButtonContainerElement.style('display', 'none');
+}
+
+// ------------------------------------
+// Message Display
+// ------------------------------------
 function updateMessageDisplay() {
-    let gameOverTitleHtml = "";
-    let turnOrWinnerHtml = "";
+    let titleHtml = ""; 
+    let detailHtml = "";
+    const p1Name = playerNames[1];
+    const p2Name = playerNames[2];
 
-    if (gameState === 'confirming' && previewStone && !gameOver) {
+    if (gameOver) {
+        const winnerName = playerNames[currentPlayer]; // currentPlayer should now point to the winner
+        const loserNum = (currentPlayer === 1) ? 2 : 1;
+        const loserName = playerNames[loserNum];
+
+        switch (gameOverReason) {
+            case 'auto_concyclic_lose':
+                titleHtml = `<strong style="font-size:1.6em;color:#e74c3c;display:block;margin-bottom:4px;">Concentric Set!</strong>`;
+                detailHtml = `${loserName} formed a concentric set.<br><strong style="font-size:1.3em;color:#27ae60;">${winnerName} wins!</strong>`;
+                break;
+            case 'challenge_won':
+                titleHtml = `<strong style="font-size:1.6em;color:#27ae60;display:block;margin-bottom:4px;">Challenge Successful!</strong>`;
+                detailHtml = `${winnerName}'s challenge was correct.<br><strong style="font-size:1.3em;color:#27ae60;">${winnerName} wins!</strong>`;
+                break;
+            case 'challenge_failed':
+                titleHtml = `<strong style="font-size:1.6em;color:#e74c3c;display:block;margin-bottom:4px;">Challenge Failed!</strong>`;
+                // In case of failed challenge, currentPlayer is the one who placed the stone (the winner)
+                // and loserName is the challenger.
+                detailHtml = `${loserName}'s challenge was incorrect.<br><strong style="font-size:1.3em;color:#27ae60;">${winnerName} wins!</strong>`;
+                break;
+            case 'board_full_draw':
+                titleHtml = `<strong style="font-size:1.6em;display:block;margin-bottom:4px;">Draw</strong>`;
+                detailHtml = `<span style="font-size:1.1em;">All spaces are filled.</span>`;
+                break;
+            default:
+                titleHtml = `<strong style="font-size:1.6em;display:block;margin-bottom:4px;">Game Over</strong>`;
+                detailHtml = `<span style="font-size:1.1em;">Result undetermined.</span>`;
+        }
+    } else if (gameState === 'CONFIRMING_SPOT' && previewStone) {
         const targetPlayerName = playerNames[currentPlayer];
-        const targetPlayerColor = currentPlayer === 1 ? '#d9534f' : '#428bca';
-        turnOrWinnerHtml = `石を置く場所: (${previewStone.x}, ${previewStone.y})<br><strong style="color:${targetPlayerColor}; font-weight:700;">${targetPlayerName}</strong> さん、ここに置きますか？`;
-    } else if (gameOver) {
-        const loserName = playerNames[currentPlayer]; // ゲームオーバーを引き起こした手番のプレイヤー
-        const winnerNum = (currentPlayer === 1) ? 2 : 1;
-        const winnerName = playerNames[winnerNum];
-
-        if (highlightedStones.length > 0) {
-             gameOverTitleHtml = `<strong style="font-size:1.5em; color: #e74c3c; display:block; margin-bottom:5px;">共円成立！</strong>`;
-             turnOrWinnerHtml = `<span style="font-size:1.1em;">${loserName} が配置。<br><strong style="color: #27ae60;">${winnerName} の勝利！</strong></span>`;
-        } else { // 引き分け
-            gameOverTitleHtml = `<strong style="font-size: 1.5em; display:block; margin-bottom:5px;">引き分け！</strong>`;
-            turnOrWinnerHtml = `<span style="font-size:1.1em;">全てのマスが埋まりました。</span>`;
-        }
-    } else { // 通常の配置選択中
-        const currentPlayerColor = currentPlayer === 1 ? '#d9534f' : '#428bca';
-        turnOrWinnerHtml = `次は <strong style="color:${currentPlayerColor}; font-weight:700;">${playerNames[currentPlayer]}</strong> の手番です`;
+        const targetPlayerColor = currentPlayer === 1 ? '#e06c75' : '#61afef';
+        detailHtml = `Place stone at: <strong style="font-weight:700;">(${previewStone.x}, ${previewStone.y})</strong><br><strong style="color:${targetPlayerColor};font-weight:700;">${targetPlayerName}</strong>, confirm placement?`;
+    } else if (gameState === 'AWAITING_CHALLENGE' && challengeRuleActive) {
+        const challengerName = playerNames[currentPlayer];
+        const placerName = playerNames[(currentPlayer === 1) ? 2 : 1];
+        const challengerColor = currentPlayer === 1 ? '#e06c75' : '#61afef';
+        detailHtml = `${placerName} placed a stone.<br><strong style="color:${challengerColor};font-weight:700;">${challengerName}</strong>, challenge this move?<br><small>(Or click board to place your stone)</small>`;
+    } else { // SELECTING_SPOT
+        const currentPlayerColor = currentPlayer === 1 ? '#e06c75' : '#61afef';
+        detailHtml = `Next turn: <strong style="color:${currentPlayerColor};font-weight:700;">${playerNames[currentPlayer]}</strong>.<br>Choose a spot to place your stone.`;
     }
-    select('#messageArea').html(gameOverTitleHtml + turnOrWinnerHtml);
+    let msgArea = select('#messageArea');
+    if (msgArea) msgArea.html(titleHtml + detailHtml);
 }
 
-
 // ------------------------------------
-// 共円/直線 表示準備と描画 (既存)
+// Drawing Functions (Grid, Stones, Preview, Conic Path)
 // ------------------------------------
-function prepareConicPathToDraw() { /* ... (変更なし) ... */ 
-    if (highlightedStones.length < 4) {
-        conicPath = null; return;
-    }
-    const [p1, p2, p3, p4] = highlightedStones;
-    if (areThreePointsCollinear(p1, p2, p3) && areThreePointsCollinear(p1, p2, p4) && areThreePointsCollinear(p1,p3,p4) && areThreePointsCollinear(p2,p3,p4) ) {
-        let sortedStones = [...highlightedStones].sort((a, b) => (a.x !== b.x) ? a.x - b.x : a.y - b.y);
-        conicPath = { type: 'line', data: { p_start: sortedStones[0], p_end: sortedStones[3] } };
-    } else { 
-        let circleData = null;
-        const combos3 = getCombinations(highlightedStones, 3);
-        for (const combo of combos3) {
-            const [c1, c2, c3] = combo;
-            if (!areThreePointsCollinear(c1, c2, c3)) {
-                circleData = calculateCircleFrom3Points(c1, c2, c3);
-                if (circleData) {
-                    const fourthPoint = highlightedStones.find(p => 
-                        (p.x !== c1.x || p.y !== c1.y) && 
-                        (p.x !== c2.x || p.y !== c2.y) && 
-                        (p.x !== c3.x || p.y !== c3.y)
-                    );
-                    if (fourthPoint) {
-                        const d = dist(fourthPoint.x, fourthPoint.y, circleData.center.x, circleData.center.y);
-                        const tolerance = Math.max(0.01, circleData.radius * 0.02); // 許容誤差を調整
-                        if (Math.abs(d - circleData.radius) < tolerance) {
-                            break; 
-                        }
-                    }
-                    circleData = null; 
-                }
-            }
-        }
-        if (circleData) {
-            conicPath = { type: 'circle', data: circleData };
-        } else {
-            console.warn("最終的に円も直線も特定できませんでした。highlightedStones:", highlightedStones);
-            let sortedStones = [...highlightedStones].sort((a,b) => (a.x - b.x) || (a.y - b.y));
-            conicPath = { type: 'line', data: {p_start: sortedStones[0], p_end: sortedStones[3] } };
-        }
-    }
-}
-function drawConicPath() { /* ... (変更なし、突き抜け処理含む) ... */ 
-    if (!conicPath || !conicPath.data) return;
+function drawPreviewStone() {
+    if (!previewStone || !stoneDisplayImage || stoneDisplayImage.width === 0) return;
+    const stoneX = previewStone.x * CELL_SIZE;
+    const stoneY = previewStone.y * CELL_SIZE;
+    const stoneSize = DOT_RADIUS * 2;
     push();
-    strokeWeight(3.5); 
-    noFill();
-    let pathColor = color(255, 69, 0, 220); 
-    if (conicPath.type === 'circle' && conicPath.data.center && conicPath.data.radius > 0) {
-        stroke(pathColor);
-        ellipseMode(CENTER);
-        ellipse(
-            conicPath.data.center.x * CELL_SIZE,
-            conicPath.data.center.y * CELL_SIZE,
-            conicPath.data.radius * 2 * CELL_SIZE,
-            conicPath.data.radius * 2 * CELL_SIZE
-        );
-    } else if (conicPath.type === 'line' && conicPath.data.p_start && conicPath.data.p_end) {
-        stroke(pathColor);
-        let p1_px = { x: conicPath.data.p_start.x * CELL_SIZE, y: conicPath.data.p_start.y * CELL_SIZE };
-        let p2_px = { x: conicPath.data.p_end.x * CELL_SIZE, y: conicPath.data.p_end.y * CELL_SIZE };
-        const minX = 0; const maxX = GRID_DIVISIONS * CELL_SIZE;
-        const minY = 0; const maxY = GRID_DIVISIONS * CELL_SIZE;
-        let pointsOnBorder = [];
-        if (Math.abs(p1_px.x - p2_px.x) < 1e-6) { 
-            pointsOnBorder.push({ x: p1_px.x, y: minY }); pointsOnBorder.push({ x: p1_px.x, y: maxY });
-        } else if (Math.abs(p1_px.y - p2_px.y) < 1e-6) {
-            pointsOnBorder.push({ x: minX, y: p1_px.y }); pointsOnBorder.push({ x: maxX, y: p1_px.y });
-        } else {
-            const slope = (p2_px.y - p1_px.y) / (p2_px.x - p1_px.x);
-            const yIntercept = p1_px.y - slope * p1_px.x;
-            let yAtMinX = slope * minX + yIntercept; if (yAtMinX >= minY && yAtMinX <= maxY) pointsOnBorder.push({ x: minX, y: yAtMinX });
-            let yAtMaxX = slope * maxX + yIntercept; if (yAtMaxX >= minY && yAtMaxX <= maxY) pointsOnBorder.push({ x: maxX, y: yAtMaxX });
-            if (Math.abs(slope) > 1e-6) {
-                let xAtMinY = (minY - yIntercept) / slope; if (xAtMinY >= minX && xAtMinY <= maxX) pointsOnBorder.push({ x: xAtMinY, y: minY });
-                let xAtMaxY = (maxY - yIntercept) / slope; if (xAtMaxY >= minX && xAtMaxY <= maxX) pointsOnBorder.push({ x: xAtMaxY, y: maxY });
-            }
-        }
-        let finalP1 = null, finalP2 = null, maxDistSq = -1;
-        if (pointsOnBorder.length >= 2) {
-            for (let i = 0; i < pointsOnBorder.length; i++) {
-                for (let j = i + 1; j < pointsOnBorder.length; j++) {
-                    let dSq = sq(pointsOnBorder[i].x - pointsOnBorder[j].x) + sq(pointsOnBorder[i].y - pointsOnBorder[j].y);
-                    if (dSq > maxDistSq) { maxDistSq = dSq; finalP1 = pointsOnBorder[i]; finalP2 = pointsOnBorder[j]; }
-                }
-            }
-        }
-        if (finalP1 && finalP2) line(finalP1.x, finalP1.y, finalP2.x, finalP2.y);
-    }
+    tint(255, 130); // Preview stone transparency
+    image(stoneDisplayImage, stoneX, stoneY, stoneSize, stoneSize);
     pop();
 }
+function drawGrid() { 
+    stroke(205,210,220); strokeWeight(1.5);
+    for(let i=0;i<=GRID_DIVISIONS;i++){
+        line(i*CELL_SIZE,0,i*CELL_SIZE,GRID_DIVISIONS*CELL_SIZE);
+        line(0,i*CELL_SIZE,GRID_DIVISIONS*CELL_SIZE,i*CELL_SIZE);
+    }
+    if(GRID_DIVISIONS===10){
+        let sP=[{x:3,y:3},{x:3,y:7},{x:7,y:3},{x:7,y:7},{x:5,y:5}];
+        fill(180,185,195); noStroke();
+        for(const p of sP) ellipse(p.x*CELL_SIZE,p.y*CELL_SIZE,DOT_RADIUS*0.25,DOT_RADIUS*0.25);
+    }
+}
+function drawStones() {
+    if (!stoneDisplayImage || stoneDisplayImage.width === 0) {
+        // Fallback to drawing circles if image not loaded
+        for (const stone of placedStones) {
+            fill(50); noStroke();
+            ellipse(stone.x * CELL_SIZE, stone.y * CELL_SIZE, DOT_RADIUS * 2, DOT_RADIUS * 2);
+        }
+        return;
+    }
+
+    for (const stone of placedStones) {
+        const stoneX = stone.x * CELL_SIZE;
+        const stoneY = stone.y * CELL_SIZE;
+        const stoneSize = DOT_RADIUS * 2;
+
+        // Simple shadow for the image
+        push();
+        translate(stoneX + 2, stoneY + 2);
+        tint(0, 40); // Black, more transparent for shadow
+        image(stoneDisplayImage, 0, 0, stoneSize, stoneSize);
+        pop();
+
+        // Draw the stone image itself (reset tint)
+        push();
+        noTint(); // Make sure image is drawn with its original colors
+        image(stoneDisplayImage, stoneX, stoneY, stoneSize, stoneSize);
+        pop();
+
+        if (gameOver && highlightedStones.some(hs => hs.x === stone.x && hs.y === stone.y)) {
+            stroke(255, 210, 0, 230); 
+            strokeWeight(3.5);
+            noFill();
+            ellipse(stoneX, stoneY, stoneSize * 1.08, stoneSize * 1.08); 
+            noStroke();
+        }
+    }
+}
+// ------------------------------------
+// Game Logic Helper Functions (updatePlayerNames, isStoneAt, resetGame)
+// ------------------------------------
+function updatePlayerNames() { 
+    if(inputPlayer1Name) playerNames[1]=inputPlayer1Name.value().trim()||"Player 1"; else playerNames[1]="Player 1";
+    if(playerNames[1]==="")playerNames[1]="Player 1";
+    if(inputPlayer2Name) playerNames[2]=inputPlayer2Name.value().trim()||"Player 2"; else playerNames[2]="Player 2";
+    if(playerNames[2]==="")playerNames[2]="Player 2";
+
+    if(!gameOver && gameState !=='CONFIRMING_SPOT' && gameState !=='AWAITING_CHALLENGE') {
+        // Only update general turn messages if not in a confirmation/challenge state
+        // (those states have specific messages handled by updateMessageDisplay directly)
+        // updateMessageDisplay(); // This might be redundant as draw() calls it anyway
+    }
+}
+function isStoneAt(x, y) { return placedStones.some(s => s.x === x && s.y === y); }
+function resetGame() {
+    console.log("Resetting game...");
+    placedStones = []; currentPlayer = 1; gameOver = false; gameOverReason = null;
+    highlightedStones = []; conicPath = null; previewStone = null;
+    lastPlacedStoneForChallenge = null;
+    if (challengeRuleCheckbox) challengeRuleActive = challengeRuleCheckbox.checked(); else challengeRuleActive = false;
+    gameState = 'SELECTING_SPOT';
+    
+    updatePlayerNames(); // Ensure names are fresh before initial message
+    
+    const cpc = currentPlayer === 1 ? '#e06c75' : '#61afef';
+    let initialMessage = `Next turn: <strong style="color:${cpc}; font-weight:700;">${playerNames[currentPlayer]}</strong>.<br>Choose a spot to place your stone.`;
+    if (challengeRuleActive) {
+        initialMessage += `<br><small style="font-size:0.85em; color:#555e68;">(Challenge Rule Enabled)</small>`;
+    }
+    let msgArea = select('#messageArea');
+    if (msgArea) msgArea.html(initialMessage);
+    
+    if (challengeButtonContainerElement) challengeButtonContainerElement.style('display', 'none');
+    console.log("Game reset. Initial gameState:", gameState);
+    loop(); 
+}
 
 // ------------------------------------
-// ゲームロジック補助関数 (既存)
+// Geometric Calculation Functions (No changes from previous correct version)
 // ------------------------------------
-function updatePlayerNames() { /* ... (変更なし) ... */ 
-    playerNames[1] = inputPlayer1Name.value().trim() || "プレイヤー1";
-    if (playerNames[1] === "") playerNames[1] = "プレイヤー1";
-    playerNames[2] = inputPlayer2Name.value().trim() || "プレイヤー2";
-    if (playerNames[2] === "") playerNames[2] = "プレイヤー2";
-    if(!gameOver && gameState !== 'confirming') updateMessageDisplay(); // 確認中はメッセージを上書きしない
-}
-function isStoneAt(x, y) { /* ... (変更なし) ... */ 
-    return placedStones.some(stone => stone.x === x && stone.y === y);
-}
-function resetGame() { /* ... (gameState, previewStoneの初期化追加) ... */ 
-    placedStones = [];
-    currentPlayer = 1;
-    gameOver = false;
-    highlightedStones = [];
-    conicPath = null;
-    gameState = 'placing'; // ★追加
-    previewStone = null;   // ★追加
-    updatePlayerNames(); 
-    const currentPlayerColor = currentPlayer === 1 ? '#d9534f' : '#428bca';
-    select('#messageArea').html(`次は <strong style="color:${currentPlayerColor}; font-weight:700;">${playerNames[currentPlayer]}</strong> の手番です`);
-    loop();
-}
-function areThreePointsCollinear(p1, p2, p3) { /* ... (変更なし) ... */ 
-    const area2 = p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y);
-    return Math.abs(area2) < 1e-7;
-}
-function calculateCircleFrom3Points(p1, p2, p3) { /* ... (変更なし) ... */ 
-    if (areThreePointsCollinear(p1, p2, p3)) return null;
-    const D = 2 * (p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y));
-    if (Math.abs(D) < 1e-9) return null;
-    const p1sq = p1.x * p1.x + p1.y * p1.y;
-    const p2sq = p2.x * p2.x + p2.y * p2.y;
-    const p3sq = p3.x * p3.x + p3.y * p3.y;
-    const centerX = (p1sq * (p2.y - p3.y) + p2sq * (p3.y - p1.y) + p3sq * (p1.y - p2.y)) / D;
-    const centerY = (p1sq * (p3.x - p2.x) + p2sq * (p1.x - p3.x) + p3sq * (p2.x - p1.x)) / D;
-    const radius = dist(p1.x, p1.y, centerX, centerY);
-    if (radius < 1e-4) return null; 
-    return { center: { x: centerX, y: centerY }, radius: radius };
-}
-function arePointsConcyclicOrCollinear(p1, p2, p3, p4) { /* ... (変更なし) ... */ 
-    const points = [p1, p2, p3, p4];
-    const m = [];
-    for (const p of points) { m.push([p.x * p.x + p.y * p.y, p.x, p.y, 1]); }
-    const det3x3 = (a,b,c, d,e,f, g,h,i) => a*(e*i - f*h) - b*(d*i - f*g) + c*(d*h - e*g);
-    let det = 0;
-    det += m[0][0] * det3x3(m[1][1], m[1][2], m[1][3], m[2][1], m[2][2], m[2][3], m[3][1], m[3][2], m[3][3]);
-    det -= m[0][1] * det3x3(m[1][0], m[1][2], m[1][3], m[2][0], m[2][2], m[2][3], m[3][0], m[3][2], m[3][3]);
-    det += m[0][2] * det3x3(m[1][0], m[1][1], m[1][3], m[2][0], m[2][1], m[2][3], m[3][0], m[3][1], m[3][3]);
-    det -= m[0][3] * det3x3(m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2], m[3][0], m[3][1], m[3][2]);
-    const EPSILON = 1e-7; return Math.abs(det) < EPSILON;
-}
-function getCombinations(arr, k) { /* ... (変更なし) ... */ 
-    if (k < 0 || k > arr.length) return []; if (k === 0) return [[]]; if (k === arr.length) return [arr]; if (k === 1) return arr.map(item => [item]);
-    const combinations = [];
-    function findCombinations(startIndex, currentCombination) {
-        if (currentCombination.length === k) { combinations.push([...currentCombination]); return; }
-        if (startIndex >= arr.length) return;
-        currentCombination.push(arr[startIndex]); findCombinations(startIndex + 1, currentCombination); currentCombination.pop();
-        if (arr.length - (startIndex + 1) >= k - currentCombination.length) findCombinations(startIndex + 1, currentCombination);
-    }
-    findCombinations(0, []); return combinations;
-}
+function areThreePointsCollinear(p1,p2,p3){const a2=p1.x*(p2.y-p3.y)+p2.x*(p3.y-p1.y)+p3.x*(p1.y-p2.y);return Math.abs(a2)<1e-7;}
+function calculateCircleFrom3Points(p1,p2,p3){if(areThreePointsCollinear(p1,p2,p3))return null;const D=2*(p1.x*(p2.y-p3.y)+p2.x*(p3.y-p1.y)+p3.x*(p1.y-p2.y));if(Math.abs(D)<1e-9)return null;const p1s=p1.x*p1.x+p1.y*p1.y;const p2s=p2.x*p2.x+p2.y*p2.y;const p3s=p3.x*p3.x+p3.y*p3.y;const cX=(p1s*(p2.y-p3.y)+p2s*(p3.y-p1.y)+p3s*(p1.y-p2.y))/D;const cY=(p1s*(p3.x-p2.x)+p2s*(p1.x-p3.x)+p3s*(p2.x-p1.x))/D;const r=dist(p1.x,p1.y,cX,cY);if(r<1e-4)return null;return{center:{x:cX,y:cY},radius:r};}
+function arePointsConcyclicOrCollinear(p1,p2,p3,p4){const ps=[p1,p2,p3,p4];const m=[];for(const p of ps){m.push([p.x*p.x+p.y*p.y,p.x,p.y,1]);}const d3=(a,b,c,d,e,f,g,h,i)=>a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g);let det=0;det+=m[0][0]*d3(m[1][1],m[1][2],m[1][3],m[2][1],m[2][2],m[2][3],m[3][1],m[3][2],m[3][3]);det-=m[0][1]*d3(m[1][0],m[1][2],m[1][3],m[2][0],m[2][2],m[2][3],m[3][0],m[3][2],m[3][3]);det+=m[0][2]*d3(m[1][0],m[1][1],m[1][3],m[2][0],m[2][1],m[2][3],m[3][0],m[3][1],m[3][3]);det-=m[0][3]*d3(m[1][0],m[1][1],m[1][2],m[2][0],m[2][1],m[2][2],m[3][0],m[3][1],m[3][2]);return Math.abs(det)<1e-7;}
+function getCombinations(arr,k){if(k<0||k>arr.length)return[];if(k===0)return[[]];if(k===arr.length)return[arr];if(k===1)return arr.map(item=>[item]);const cmb=[];function find(idx,curr){if(curr.length===k){cmb.push([...curr]);return;}if(idx>=arr.length)return;curr.push(arr[idx]);find(idx+1,curr);curr.pop();if(arr.length-(idx+1)>=k-curr.length)find(idx+1,curr);}find(0,[]);return cmb;}
+function prepareConicPathToDraw() { if(highlightedStones.length<4){conicPath=null;return;}const [p1,p2,p3,p4]=highlightedStones;if(areThreePointsCollinear(p1,p2,p3)&&areThreePointsCollinear(p1,p2,p4)&&areThreePointsCollinear(p1,p3,p4)&&areThreePointsCollinear(p2,p3,p4)){let sS=[...highlightedStones].sort((a,b)=>(a.x!==b.x)?a.x-b.x:a.y-b.y);conicPath={type:'line',data:{p_start:sS[0],p_end:sS[3]}};}else{let cD=null;const c3=getCombinations(highlightedStones,3);for(const cb of c3){const[c1,c2,c3_]=cb;if(!areThreePointsCollinear(c1,c2,c3_)){cD=calculateCircleFrom3Points(c1,c2,c3_);if(cD){const fP=highlightedStones.find(p=>(p.x!==c1.x||p.y!==c1.y)&&(p.x!==c2.x||p.y!==c2.y)&&(p.x!==c3_.x||p.y!==c3_.y));if(fP){const d=dist(fP.x,fP.y,cD.center.x,cD.center.y);const tol=Math.max(0.01,cD.radius*0.02);if(Math.abs(d-cD.radius)<tol)break;}cD=null;}}}if(cD){conicPath={type:'circle',data:cD};}else{console.warn("Circle identification failed:",highlightedStones);let sS=[...highlightedStones].sort((a,b)=>(a.x-b.x)||(a.y-b.y));conicPath={type:'line',data:{p_start:sS[0],p_end:sS[3]}};}}}
+function drawConicPath() { if(!conicPath||!conicPath.data)return;push();strokeWeight(3.5);noFill();let pC=color(255,80,50,210);if(conicPath.type==='circle'&&conicPath.data.center&&conicPath.data.radius>0){stroke(pC);ellipseMode(CENTER);ellipse(conicPath.data.center.x*CELL_SIZE,conicPath.data.center.y*CELL_SIZE,conicPath.data.radius*2*CELL_SIZE,conicPath.data.radius*2*CELL_SIZE);}else if(conicPath.type==='line'&&conicPath.data.p_start&&conicPath.data.p_end){stroke(pC);let p1px={x:conicPath.data.p_start.x*CELL_SIZE,y:conicPath.data.p_start.y*CELL_SIZE};let p2px={x:conicPath.data.p_end.x*CELL_SIZE,y:conicPath.data.p_end.y*CELL_SIZE};const minX=0;const maxX=GRID_DIVISIONS*CELL_SIZE;const minY=0;const maxY=GRID_DIVISIONS*CELL_SIZE;let ptsOB=[];if(Math.abs(p1px.x-p2px.x)<1e-6){ptsOB.push({x:p1px.x,y:minY});ptsOB.push({x:p1px.x,y:maxY});}else if(Math.abs(p1px.y-p2px.y)<1e-6){ptsOB.push({x:minX,y:p1px.y});ptsOB.push({x:maxX,y:p1px.y});}else{const sl=(p2px.y-p1px.y)/(p2px.x-p1px.x);const yI=p1px.y-sl*p1px.x;let yAMX=sl*minX+yI;if(yAMX>=minY&&yAMX<=maxY)ptsOB.push({x:minX,y:yAMX});let yAMaX=sl*maxX+yI;if(yAMaX>=minY&&yAMaX<=maxY)ptsOB.push({x:maxX,y:yAMaX});if(Math.abs(sl)>1e-6){let xAMY=(minY-yI)/sl;if(xAMY>=minX&&xAMY<=maxX)ptsOB.push({x:xAMY,y:minY});let xAMaY=(maxY-yI)/sl;if(xAMaY>=minX&&xAMaY<=maxX)ptsOB.push({x:xAMaY,y:maxY});}}let fP1=null,fP2=null,mDSq=-1;if(ptsOB.length>=2){for(let i=0;i<ptsOB.length;i++){for(let j=i+1;j<ptsOB.length;j++){let dSq=sq(ptsOB[i].x-ptsOB[j].x)+sq(ptsOB[i].y-ptsOB[j].y);if(dSq>mDSq){mDSq=dSq;fP1=ptsOB[i];fP2=ptsOB[j];}}}}if(fP1&&fP2)line(fP1.x,fP1.y,fP2.x,fP2.y);}pop();}

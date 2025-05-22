@@ -1,46 +1,83 @@
 // --- 定数定義 ---
-const GRID_DIVISIONS = 15;
+// (変更なし)
+const GRID_DIVISIONS = 10;
 const CELL_SIZE = 35;
 const DOT_RADIUS = CELL_SIZE * 0.42;
-const STONE_COLOR = [35, 35, 35, 255]; // 石の色をさらに濃く
+const STONE_COLOR = [35, 35, 35, 255];
 
 const CANVAS_WIDTH = GRID_DIVISIONS * CELL_SIZE + CELL_SIZE;
-const CANVAS_HEIGHT = GRID_DIVISIONS * CELL_SIZE + CELL_SIZE;
+const CANVAS_HEIGHT = GRID_DIVISIONS * CELL_SIZE + CELL_SIZE; // ボタンエリア分を考慮して少し広げることも可能
 const DRAW_OFFSET = CELL_SIZE / 2;
 
+// 確認ボタン用の定数
+const CONFIRM_BUTTON_HEIGHT = CELL_SIZE * 1.2;
+const CONFIRM_BUTTON_WIDTH = CELL_SIZE * 3;
+const CONFIRM_BUTTON_PADDING = 10; // ボタン間の余白
+
 // --- グローバル変数 ---
+// (既存の変数)
 let placedStones = [];
 let currentPlayer = 1;
 let playerNames = { 1: "プレイヤー1", 2: "プレイヤー2" };
 let gameOver = false;
 let highlightedStones = [];
 let conicPath = null;
-
 let resetButton;
 let inputPlayer1Name, inputPlayer2Name;
-let canvasInstance; // p5.jsのキャンバスインスタンスを保持
+let canvasInstance;
+
+// ★ 新しいグローバル変数
+let gameState = 'placing'; // 'placing' (配置選択中), 'confirming' (配置確認中)
+let previewStone = null;   // {x: gridX, y: gridY} 仮置きする石の格子座標
+let okButton, cancelButton; // 確認ボタンの当たり判定用オブジェクト
 
 // ------------------------------------
 // p5.js のライフサイクル関数
 // ------------------------------------
 function setup() {
+    // キャンバスの高さをボタン分だけ少し広げる場合
+    // createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT + CONFIRM_BUTTON_HEIGHT + CONFIRM_BUTTON_PADDING * 2);
+    // 今回は、ボタンはグリッドエリアの外、下部に描画することを目指し、
+    // キャンバスサイズは一旦そのままにして、ボタンがグリッドと重ならないようにY座標を調整します。
+    // もしボタンをグリッドの下に完全に分離したいなら、CANVAS_HEIGHTを増やす必要があります。
     canvasInstance = createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
-    // HTMLの構成に合わせて、キャンバスをボタンの前に挿入
     let controlsDiv = select('.controls');
     if (controlsDiv) {
-        canvasInstance.parent(controlsDiv.elt.parentNode, controlsDiv.elt.nextSibling); // controlsDiv の次に canvas を配置
+        canvasInstance.parent(controlsDiv.elt.parentNode, controlsDiv.elt.nextSibling);
     }
 
-
-    textFont('Inter, Noto Sans JP, sans-serif'); // フォント指定
-
+    textFont('Inter, Noto Sans JP, sans-serif');
     resetButton = select('#resetButton');
     resetButton.mousePressed(resetGame);
-
     inputPlayer1Name = select('#player1NameInput');
     inputPlayer2Name = select('#player2NameInput');
     inputPlayer1Name.input(updatePlayerNames);
     inputPlayer2Name.input(updatePlayerNames);
+
+    // 確認ボタンの定義 (位置はdraw内で動的に決めることも、固定にすることも可能)
+    // 今回は盤面の下部中央に固定で表示
+    const buttonY = GRID_DIVISIONS * CELL_SIZE + DRAW_OFFSET + CONFIRM_BUTTON_PADDING + CONFIRM_BUTTON_HEIGHT / 2;
+    // ただし、このY座標はtranslate後の座標系。実際の描画は translate(-DRAW_OFFSET, -DRAW_OFFSET) 後に。
+    // もっと簡単なのは、キャンバスの下端を基準にする。
+    // 画面下部にボタンを配置
+    const totalButtonWidth = CONFIRM_BUTTON_WIDTH * 2 + CONFIRM_BUTTON_PADDING;
+    const buttonStartX = (width - totalButtonWidth) / 2; // キャンバス全体の幅基準
+
+    okButton = {
+        x: buttonStartX,
+        y: height - CONFIRM_BUTTON_HEIGHT - CONFIRM_BUTTON_PADDING, // キャンバス下端基準
+        w: CONFIRM_BUTTON_WIDTH,
+        h: CONFIRM_BUTTON_HEIGHT,
+        label: "置く"
+    };
+    cancelButton = {
+        x: buttonStartX + CONFIRM_BUTTON_WIDTH + CONFIRM_BUTTON_PADDING,
+        y: height - CONFIRM_BUTTON_HEIGHT - CONFIRM_BUTTON_PADDING, // キャンバス下端基準
+        w: CONFIRM_BUTTON_WIDTH,
+        h: CONFIRM_BUTTON_HEIGHT,
+        label: "やめる"
+    };
+
 
     textAlign(CENTER, CENTER);
     updatePlayerNames();
@@ -48,230 +85,276 @@ function setup() {
 }
 
 function draw() {
-    background(238, 241, 245); // HTML背景色と調和
+    background(238, 241, 245);
+    
+    push(); // グリッドと石のための描画コンテキスト
     translate(DRAW_OFFSET, DRAW_OFFSET);
-
     drawGrid();
     if (gameOver && conicPath) {
         drawConicPath();
     }
     drawStones();
+    if (gameState === 'confirming' && previewStone) {
+        drawPreviewStone();
+    }
+    pop(); // グリッドと石の描画コンテキストを終了
 
-    // キャンバス上のゲームオーバーメッセージは削除
-    // if (gameOver) {
-    //     drawGameOverMessage(); // この関数は削除またはコメントアウト
-    // }
-
-    resetMatrix(); // translateをリセット
-    updateMessageDisplay(); // メッセージは常にHTML側で更新
+    // 確認ボタンは translate の影響を受けないキャンバス座標で描画
+    if (gameState === 'confirming') {
+        drawConfirmButtons();
+    }
+    
+    updateMessageDisplay();
 }
 
 function mousePressed() {
     if (gameOver) return;
-    // マウスがキャンバス内にあるかチェック
-    if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) {
-        return;
-    }
 
-    let boardMouseX = mouseX - DRAW_OFFSET;
-    let boardMouseY = mouseY - DRAW_OFFSET;
-    let gridX = Math.round(boardMouseX / CELL_SIZE);
-    let gridY = Math.round(boardMouseY / CELL_SIZE);
+    if (gameState === 'placing') {
+        // 石の配置選択
+        // マウス座標がキャンバス内かチェック (translate前の座標で)
+        if (mouseX < DRAW_OFFSET || mouseX > CANVAS_WIDTH - DRAW_OFFSET || 
+            mouseY < DRAW_OFFSET || mouseY > CANVAS_HEIGHT - DRAW_OFFSET) {
+            // グリッドエリア外のクリックは何もしない (ボタンエリアは除く)
+            // ただし、確認ボタンがないときは何もしない
+            return;
+        }
 
-    if (gridX >= 0 && gridX <= GRID_DIVISIONS &&
-        gridY >= 0 && gridY <= GRID_DIVISIONS) {
-        if (!isStoneAt(gridX, gridY)) {
-            const newStone = { x: gridX, y: gridY };
-            placedStones.push(newStone);
+        let boardMouseX = mouseX - DRAW_OFFSET;
+        let boardMouseY = mouseY - DRAW_OFFSET;
+        let gridX = Math.round(boardMouseX / CELL_SIZE);
+        let gridY = Math.round(boardMouseY / CELL_SIZE);
 
-            if (placedStones.length >= 4) {
-                const combinations = getCombinations(placedStones, 4);
-                for (const combo of combinations) {
-                    if (arePointsConcyclicOrCollinear(combo[0], combo[1], combo[2], combo[3])) {
-                        gameOver = true;
-                        highlightedStones = [...combo];
-                        prepareConicPathToDraw();
-                        break;
+        if (gridX >= 0 && gridX <= GRID_DIVISIONS &&
+            gridY >= 0 && gridY <= GRID_DIVISIONS) {
+            if (!isStoneAt(gridX, gridY)) {
+                previewStone = { x: gridX, y: gridY };
+                gameState = 'confirming';
+            }
+        }
+    } else if (gameState === 'confirming') {
+        // 確認ボタンのクリック判定 (translate前の座標で)
+        if (isButtonClicked(okButton, mouseX, mouseY)) {
+            placeStoneAtPreviewLocation(); // 石を正式に配置
+            gameState = 'placing';
+            previewStone = null;
+        } else if (isButtonClicked(cancelButton, mouseX, mouseY)) {
+            gameState = 'placing';
+            previewStone = null;
+        } else {
+            // ボタン以外の場所をクリックした場合、新しい仮置き場所を選択する
+            // ただし、クリックがグリッドエリア内なら
+            if (mouseX >= DRAW_OFFSET && mouseX <= CANVAS_WIDTH - DRAW_OFFSET && 
+                mouseY >= DRAW_OFFSET && mouseY <= CANVAS_HEIGHT - DRAW_OFFSET) {
+                
+                let boardMouseX = mouseX - DRAW_OFFSET;
+                let boardMouseY = mouseY - DRAW_OFFSET;
+                let gridX = Math.round(boardMouseX / CELL_SIZE);
+                let gridY = Math.round(boardMouseY / CELL_SIZE);
+
+                if (gridX >= 0 && gridX <= GRID_DIVISIONS &&
+                    gridY >= 0 && gridY <= GRID_DIVISIONS) {
+                    if (!isStoneAt(gridX, gridY)) {
+                        previewStone = { x: gridX, y: gridY }; // 新しいプレビュー場所
+                    } else if (gridX === previewStone.x && gridY === previewStone.y) {
+                        // プレビュー中の石を再度クリックしたら確定、という動作も考えられる
+                        // placeStoneAtPreviewLocation();
+                        // gameState = 'placing';
+                        // previewStone = null;
                     }
                 }
-            }
-
-            if (!gameOver) {
-                if (placedStones.length === (GRID_DIVISIONS + 1) * (GRID_DIVISIONS + 1)) {
-                    gameOver = true;
-                } else {
-                    currentPlayer = (currentPlayer === 1) ? 2 : 1;
-                }
+            } else {
+                 // グリッドエリア外かつボタン外なら何もしない (キャンセルもしない)
+                 // または、ここでキャンセル扱いにする場合は gameState = 'placing'; previewStone = null;
             }
         }
     }
 }
 
 // ------------------------------------
-// 描画関連関数
+// 石の配置と確認関連の関数
 // ------------------------------------
-function drawGrid() {
-    stroke(190, 195, 205); // グリッド線の色
+function placeStoneAtPreviewLocation() {
+    if (!previewStone) return;
+
+    const newStone = { x: previewStone.x, y: previewStone.y };
+    placedStones.push(newStone);
+
+    if (placedStones.length >= 4) {
+        const combinations = getCombinations(placedStones, 4);
+        for (const combo of combinations) {
+            if (arePointsConcyclicOrCollinear(combo[0], combo[1], combo[2], combo[3])) {
+                gameOver = true;
+                highlightedStones = [...combo];
+                prepareConicPathToDraw();
+                break;
+            }
+        }
+    }
+
+    if (!gameOver) {
+        if (placedStones.length === (GRID_DIVISIONS + 1) * (GRID_DIVISIONS + 1)) {
+            gameOver = true; // 引き分け
+        } else {
+            currentPlayer = (currentPlayer === 1) ? 2 : 1;
+        }
+    }
+}
+
+function drawPreviewStone() {
+    if (!previewStone) return;
+    // 石本体と同じ色だが、アルファ値を下げて半透明にする
+    let previewColor = color(STONE_COLOR[0], STONE_COLOR[1], STONE_COLOR[2], 128); // 半透明
+    fill(previewColor);
+    noStroke();
+    ellipse(
+        previewStone.x * CELL_SIZE,
+        previewStone.y * CELL_SIZE,
+        DOT_RADIUS * 2,
+        DOT_RADIUS * 2
+    );
+}
+
+function drawConfirmButtons() {
+    // OKボタン
+    fill(92, 184, 92, 220); // 緑系
+    noStroke();
+    rect(okButton.x, okButton.y, okButton.w, okButton.h, 5); // 角丸
+    fill(255);
+    textSize(CONFIRM_BUTTON_HEIGHT * 0.4);
+    text(okButton.label, okButton.x + okButton.w / 2, okButton.y + okButton.h / 2);
+
+    // Cancelボタン
+    fill(217, 83, 79, 220); // 赤系
+    noStroke();
+    rect(cancelButton.x, cancelButton.y, cancelButton.w, cancelButton.h, 5); // 角丸
+    fill(255);
+    textSize(CONFIRM_BUTTON_HEIGHT * 0.4);
+    text(cancelButton.label, cancelButton.x + cancelButton.w / 2, cancelButton.y + cancelButton.h / 2);
+}
+
+function isButtonClicked(button, mx, my) {
+    return mx >= button.x && mx <= button.x + button.w &&
+           my >= button.y && my <= button.y + button.h;
+}
+
+// ------------------------------------
+// 描画関連関数 (既存)
+// ------------------------------------
+function drawGrid() { /* ... (変更なし) ... */ 
+    stroke(190, 195, 205);
     strokeWeight(1);
     for (let i = 0; i <= GRID_DIVISIONS; i++) {
         line(i * CELL_SIZE, 0, i * CELL_SIZE, GRID_DIVISIONS * CELL_SIZE);
         line(0, i * CELL_SIZE, GRID_DIVISIONS * CELL_SIZE, i * CELL_SIZE);
     }
-
     if (GRID_DIVISIONS === 12) {
       let starPoints = [ {x:3, y:3}, {x:3, y:9}, {x:9, y:3}, {x:9, y:9}, {x:6, y:6} ];
-      fill(170, 175, 185); // 星の色
+      fill(170, 175, 185);
       noStroke();
       for (const p of starPoints) {
           ellipse(p.x * CELL_SIZE, p.y * CELL_SIZE, DOT_RADIUS * 0.2, DOT_RADIUS * 0.2);
       }
     }
 }
-
-function drawStones() {
+function drawStones() { /* ... (変更なし、ハイライト含む) ... */ 
     for (const stone of placedStones) {
-        // 簡易的な影
-        fill(0, 0, 0, 30); // さらに薄い影
+        fill(0, 0, 0, 30);
         noStroke();
-        ellipse(
-            stone.x * CELL_SIZE + 1.5, // オフセット微調整
-            stone.y * CELL_SIZE + 1.5,
-            DOT_RADIUS * 2,
-            DOT_RADIUS * 2
-        );
-
-        // 石本体
+        ellipse(stone.x * CELL_SIZE + 1.5, stone.y * CELL_SIZE + 1.5, DOT_RADIUS * 2, DOT_RADIUS * 2);
         fill(STONE_COLOR[0], STONE_COLOR[1], STONE_COLOR[2], STONE_COLOR[3]);
-        
-        // ハイライト (左上からの光)
-        fill(255, 255, 255, 50); // 半透明の白
-        ellipse(
-            stone.x * CELL_SIZE - DOT_RADIUS * 0.35,
-            stone.y * CELL_SIZE - DOT_RADIUS * 0.35,
-            DOT_RADIUS, // ハイライトのサイズを調整
-            DOT_RADIUS
-        );
-        
-        // 石本体を再描画 (ハイライトが内側に収まるようにするため、fillを戻す)
+        fill(255, 255, 255, 50);
+        ellipse(stone.x * CELL_SIZE - DOT_RADIUS * 0.35, stone.y * CELL_SIZE - DOT_RADIUS * 0.35, DOT_RADIUS, DOT_RADIUS);
         fill(STONE_COLOR[0], STONE_COLOR[1], STONE_COLOR[2], STONE_COLOR[3]);
-
         if (gameOver && highlightedStones.some(hs => hs.x === stone.x && hs.y === stone.y)) {
-            stroke(255, 200, 0); // 強調用のオレンジゴールド系
+            stroke(255, 200, 0); 
             strokeWeight(3);
         } else {
             noStroke();
         }
-        ellipse(
-            stone.x * CELL_SIZE,
-            stone.y * CELL_SIZE,
-            DOT_RADIUS * 2,
-            DOT_RADIUS * 2
-        );
+        ellipse(stone.x * CELL_SIZE, stone.y * CELL_SIZE, DOT_RADIUS * 2, DOT_RADIUS * 2);
     }
     noStroke();
 }
-
-// drawGameOverMessage() はHTMLに集約するため削除
 
 function updateMessageDisplay() {
     let gameOverTitleHtml = "";
     let turnOrWinnerHtml = "";
 
-    if (gameOver) {
-        const loserName = playerNames[currentPlayer];
+    if (gameState === 'confirming' && previewStone && !gameOver) {
+        const targetPlayerName = playerNames[currentPlayer];
+        const targetPlayerColor = currentPlayer === 1 ? '#d9534f' : '#428bca';
+        turnOrWinnerHtml = `石を置く場所: (${previewStone.x}, ${previewStone.y})<br><strong style="color:${targetPlayerColor}; font-weight:700;">${targetPlayerName}</strong> さん、ここに置きますか？`;
+    } else if (gameOver) {
+        const loserName = playerNames[currentPlayer]; // ゲームオーバーを引き起こした手番のプレイヤー
         const winnerNum = (currentPlayer === 1) ? 2 : 1;
         const winnerName = playerNames[winnerNum];
 
         if (highlightedStones.length > 0) {
              gameOverTitleHtml = `<strong style="font-size:1.5em; color: #e74c3c; display:block; margin-bottom:5px;">共円成立！</strong>`;
              turnOrWinnerHtml = `<span style="font-size:1.1em;">${loserName} が配置。<br><strong style="color: #27ae60;">${winnerName} の勝利！</strong></span>`;
-        } else {
+        } else { // 引き分け
             gameOverTitleHtml = `<strong style="font-size: 1.5em; display:block; margin-bottom:5px;">引き分け！</strong>`;
             turnOrWinnerHtml = `<span style="font-size:1.1em;">全てのマスが埋まりました。</span>`;
         }
-    } else {
-        const currentPlayerColor = currentPlayer === 1 ? '#d9534f' : '#428bca'; // より明確な色
+    } else { // 通常の配置選択中
+        const currentPlayerColor = currentPlayer === 1 ? '#d9534f' : '#428bca';
         turnOrWinnerHtml = `次は <strong style="color:${currentPlayerColor}; font-weight:700;">${playerNames[currentPlayer]}</strong> の手番です`;
     }
     select('#messageArea').html(gameOverTitleHtml + turnOrWinnerHtml);
 }
 
+
 // ------------------------------------
-// 共円/直線 表示準備と描画 (直線判定の修正)
+// 共円/直線 表示準備と描画 (既存)
 // ------------------------------------
-function prepareConicPathToDraw() {
+function prepareConicPathToDraw() { /* ... (変更なし) ... */ 
     if (highlightedStones.length < 4) {
-        conicPath = null;
-        return;
+        conicPath = null; return;
     }
     const [p1, p2, p3, p4] = highlightedStones;
-
-    // 4点が同一直線上にあるか判定 (より確実な方法)
-    // 3点(p1,p2,p3)が直線 && 3点(p1,p2,p4)が直線 (p1,p2は異なる2点とする)
-    // または、全ての点のペアの傾きが（ほぼ）等しいなど。
-    // ここでは、p1,p2,p3が直線で、かつp4がその直線に乗っているかで判定
     if (areThreePointsCollinear(p1, p2, p3) && areThreePointsCollinear(p1, p2, p4) && areThreePointsCollinear(p1,p3,p4) && areThreePointsCollinear(p2,p3,p4) ) {
-        console.log("直線として処理 (4点共線):", highlightedStones);
-        // x座標でソートし、同値ならy座標でソートして両端を取る
-        let sortedStones = [...highlightedStones].sort((a, b) => {
-            if (a.x !== b.x) return a.x - b.x;
-            return a.y - b.y;
-        });
+        let sortedStones = [...highlightedStones].sort((a, b) => (a.x !== b.x) ? a.x - b.x : a.y - b.y);
         conicPath = { type: 'line', data: { p_start: sortedStones[0], p_end: sortedStones[3] } };
-    } else { // 直線でなければ円 (のはず)
-        console.log("円として処理の可能性:", highlightedStones);
+    } else { 
         let circleData = null;
         const combos3 = getCombinations(highlightedStones, 3);
         for (const combo of combos3) {
             const [c1, c2, c3] = combo;
-            if (!areThreePointsCollinear(c1, c2, c3)) { // この3点が直線でない場合のみ円を計算
+            if (!areThreePointsCollinear(c1, c2, c3)) {
                 circleData = calculateCircleFrom3Points(c1, c2, c3);
                 if (circleData) {
-                    // 残り1点がこの円周上にあるか確認 (arePointsConcyclicOrCollinearで確認済みのはず)
-                    const fourthPoint = highlightedStones.find(p =>
-                        p.x !== c1.x || p.y !== c1.y &&
-                        p.x !== c2.x || p.y !== c2.y &&
-                        p.x !== c3.x || p.y !== c3.y
+                    const fourthPoint = highlightedStones.find(p => 
+                        (p.x !== c1.x || p.y !== c1.y) && 
+                        (p.x !== c2.x || p.y !== c2.y) && 
+                        (p.x !== c3.x || p.y !== c3.y)
                     );
                     if (fourthPoint) {
                         const d = dist(fourthPoint.x, fourthPoint.y, circleData.center.x, circleData.center.y);
-                        // 許容誤差は半径の数%程度か、固定値
-                        const tolerance = Math.max(0.1, circleData.radius * 0.05); // 半径が小さい場合は固定誤差
+                        const tolerance = Math.max(0.01, circleData.radius * 0.02); // 許容誤差を調整
                         if (Math.abs(d - circleData.radius) < tolerance) {
-                            break; // 適切な円が見つかった
+                            break; 
                         }
                     }
-                    circleData = null; // 4点目が乗らない or fourthPointが見つからない場合は不適切
+                    circleData = null; 
                 }
             }
         }
-
         if (circleData) {
             conicPath = { type: 'circle', data: circleData };
         } else {
-            // 行列式では共円/直線だが、上記の詳細判定でどちらも明確に特定できなかった場合
-            // (浮動小数点誤差などが原因で発生しうる)
-            // この場合、フォールバックとして最も可能性の高いものを描画するか、何もしない
             console.warn("最終的に円も直線も特定できませんでした。highlightedStones:", highlightedStones);
-            // デバッグ用に、強制的に直線を引いてみる
             let sortedStones = [...highlightedStones].sort((a,b) => (a.x - b.x) || (a.y - b.y));
             conicPath = { type: 'line', data: {p_start: sortedStones[0], p_end: sortedStones[3] } };
-            // conicPath = null; // 本番ではnullが良いかも
         }
     }
-    // console.log("最終的なconicPath:", conicPath);
 }
-
-
-function drawConicPath() {
+function drawConicPath() { /* ... (変更なし、突き抜け処理含む) ... */ 
     if (!conicPath || !conicPath.data) return;
-
     push();
-    strokeWeight(3.5); // 少し太く
+    strokeWeight(3.5); 
     noFill();
-    // 線の色をより目立つように
-    let pathColor = color(255, 69, 0, 220); // オレンジレッド系、少し透明度
-
+    let pathColor = color(255, 69, 0, 220); 
     if (conicPath.type === 'circle' && conicPath.data.center && conicPath.data.radius > 0) {
         stroke(pathColor);
         ellipseMode(CENTER);
@@ -281,204 +364,104 @@ function drawConicPath() {
             conicPath.data.radius * 2 * CELL_SIZE,
             conicPath.data.radius * 2 * CELL_SIZE
         );
-    // --- ここから書き換え部分 ---
     } else if (conicPath.type === 'line' && conicPath.data.p_start && conicPath.data.p_end) {
         stroke(pathColor);
-        
-        // 格子座標をピクセル座標に変換
-        let p1_px = { 
-            x: conicPath.data.p_start.x * CELL_SIZE, 
-            y: conicPath.data.p_start.y * CELL_SIZE 
-        };
-        let p2_px = { 
-            x: conicPath.data.p_end.x * CELL_SIZE, 
-            y: conicPath.data.p_end.y * CELL_SIZE 
-        };
-
-        // 盤面の境界 (translate後の描画座標系)
-        const minX = 0;
-        const maxX = GRID_DIVISIONS * CELL_SIZE;
-        const minY = 0;
-        const maxY = GRID_DIVISIONS * CELL_SIZE;
-
+        let p1_px = { x: conicPath.data.p_start.x * CELL_SIZE, y: conicPath.data.p_start.y * CELL_SIZE };
+        let p2_px = { x: conicPath.data.p_end.x * CELL_SIZE, y: conicPath.data.p_end.y * CELL_SIZE };
+        const minX = 0; const maxX = GRID_DIVISIONS * CELL_SIZE;
+        const minY = 0; const maxY = GRID_DIVISIONS * CELL_SIZE;
         let pointsOnBorder = [];
-
-        if (Math.abs(p1_px.x - p2_px.x) < 1e-6) { // 垂直な直線 x = C
-            pointsOnBorder.push({ x: p1_px.x, y: minY });
-            pointsOnBorder.push({ x: p1_px.x, y: maxY });
-        } else if (Math.abs(p1_px.y - p2_px.y) < 1e-6) { // 水平な直線 y = C
-            pointsOnBorder.push({ x: minX, y: p1_px.y });
-            pointsOnBorder.push({ x: maxX, y: p1_px.y });
-        } else { // 斜めの直線
-            const slope = (p2_px.y - p1_px.y) / (p2_px.x - p1_px.x);
-            const yIntercept = p1_px.y - slope * p1_px.x; // y = slope * x + yIntercept
-
-            // y = slope * x + yIntercept
-            // x = (y - yIntercept) / slope
-
-            // 境界 x = minX との交点
-            let yAtMinX = slope * minX + yIntercept;
-            if (yAtMinX >= minY && yAtMinX <= maxY) {
-                pointsOnBorder.push({ x: minX, y: yAtMinX });
-            }
-
-            // 境界 x = maxX との交点
-            let yAtMaxX = slope * maxX + yIntercept;
-            if (yAtMaxX >= minY && yAtMaxX <= maxY) {
-                pointsOnBorder.push({ x: maxX, y: yAtMaxX });
-            }
-
-            // 境界 y = minY との交点
-            if (Math.abs(slope) > 1e-6) { // slopeが0でない（水平でない）
-                let xAtMinY = (minY - yIntercept) / slope;
-                if (xAtMinY >= minX && xAtMinY <= maxX) {
-                    pointsOnBorder.push({ x: xAtMinY, y: minY });
-                }
-            }
-            
-            // 境界 y = maxY との交点
-            if (Math.abs(slope) > 1e-6) { // slopeが0でない（水平でない）
-                let xAtMaxY = (maxY - yIntercept) / slope;
-                if (xAtMaxY >= minX && xAtMaxY <= maxX) {
-                    pointsOnBorder.push({ x: xAtMaxY, y: maxY });
-                }
-            }
-            // 重複する可能性のある点をフィルタリング (実数比較なので誤差に注意)
-            // 簡単のため、ここでは重複フィルタは省略。通常2点が見つかるはず。
-            // より堅牢にするなら、点をx,yでソートしてユニークにするなど。
-        }
-        
-        // 描画する点が2つ見つかった場合のみ線を描画
-        if (pointsOnBorder.length >= 2) {
-            // 通常はちょうど2点になる。3点以上になるのは稀なケース(角を通るなど)だが、
-            // その場合でも最初と最後の2点を取るなどで対応可能。
-            // ここでは単純に最初の2点を取る。
-            // (もしpointsOnBorderが4点などになる場合は、その中から最も離れた2点を選ぶロジックが必要)
-            // 実際には、有効な交点は最大でも2つのはず。
-            
-            // pointsOnBorderの中から距離が最も離れた2点を選ぶ方が確実
-            let finalP1 = null, finalP2 = null, maxDistSq = -1;
-            if (pointsOnBorder.length >= 2) {
-                for (let i = 0; i < pointsOnBorder.length; i++) {
-                    for (let j = i + 1; j < pointsOnBorder.length; j++) {
-                        let dSq = sq(pointsOnBorder[i].x - pointsOnBorder[j].x) + 
-                                sq(pointsOnBorder[i].y - pointsOnBorder[j].y);
-                        if (dSq > maxDistSq) {
-                            maxDistSq = dSq;
-                            finalP1 = pointsOnBorder[i];
-                            finalP2 = pointsOnBorder[j];
-                        }
-                    }
-                }
-            }
-
-            if (finalP1 && finalP2) {
-                line(finalP1.x, finalP1.y, finalP2.x, finalP2.y);
-            } else if (pointsOnBorder.length >=2) { // フォールバック (上記ロジックがうまく行かなかった場合)
-                line(pointsOnBorder[0].x, pointsOnBorder[0].y, pointsOnBorder[1].x, pointsOnBorder[1].y);
-            } else {
-                // 念のため、元のp_start, p_endで描画 (デバッグ用)
-                // console.warn("直線突き抜け描画で適切な境界交点が見つかりませんでした。元の線で描画します。");
-                // line(p1_px.x, p1_px.y, p2_px.x, p2_px.y);
-            }
+        if (Math.abs(p1_px.x - p2_px.x) < 1e-6) { 
+            pointsOnBorder.push({ x: p1_px.x, y: minY }); pointsOnBorder.push({ x: p1_px.x, y: maxY });
+        } else if (Math.abs(p1_px.y - p2_px.y) < 1e-6) {
+            pointsOnBorder.push({ x: minX, y: p1_px.y }); pointsOnBorder.push({ x: maxX, y: p1_px.y });
         } else {
-            // 元の線分を描画 (フォールバック)
-            // console.warn("直線突き抜け描画で境界交点が2つ未満でした。元の線で描画します。");
-            // line(p1_px.x, p1_px.y, p2_px.x, p2_px.y);
+            const slope = (p2_px.y - p1_px.y) / (p2_px.x - p1_px.x);
+            const yIntercept = p1_px.y - slope * p1_px.x;
+            let yAtMinX = slope * minX + yIntercept; if (yAtMinX >= minY && yAtMinX <= maxY) pointsOnBorder.push({ x: minX, y: yAtMinX });
+            let yAtMaxX = slope * maxX + yIntercept; if (yAtMaxX >= minY && yAtMaxX <= maxY) pointsOnBorder.push({ x: maxX, y: yAtMaxX });
+            if (Math.abs(slope) > 1e-6) {
+                let xAtMinY = (minY - yIntercept) / slope; if (xAtMinY >= minX && xAtMinY <= maxX) pointsOnBorder.push({ x: xAtMinY, y: minY });
+                let xAtMaxY = (maxY - yIntercept) / slope; if (xAtMaxY >= minX && xAtMaxY <= maxX) pointsOnBorder.push({ x: xAtMaxY, y: maxY });
+            }
         }
+        let finalP1 = null, finalP2 = null, maxDistSq = -1;
+        if (pointsOnBorder.length >= 2) {
+            for (let i = 0; i < pointsOnBorder.length; i++) {
+                for (let j = i + 1; j < pointsOnBorder.length; j++) {
+                    let dSq = sq(pointsOnBorder[i].x - pointsOnBorder[j].x) + sq(pointsOnBorder[i].y - pointsOnBorder[j].y);
+                    if (dSq > maxDistSq) { maxDistSq = dSq; finalP1 = pointsOnBorder[i]; finalP2 = pointsOnBorder[j]; }
+                }
+            }
+        }
+        if (finalP1 && finalP2) line(finalP1.x, finalP1.y, finalP2.x, finalP2.y);
     }
-    // --- ここまでが書き換え部分 ---
     pop();
 }
 
 // ------------------------------------
-// ゲームロジック補助関数 (変更なし/微修正)
+// ゲームロジック補助関数 (既存)
 // ------------------------------------
-function updatePlayerNames() {
+function updatePlayerNames() { /* ... (変更なし) ... */ 
     playerNames[1] = inputPlayer1Name.value().trim() || "プレイヤー1";
     if (playerNames[1] === "") playerNames[1] = "プレイヤー1";
     playerNames[2] = inputPlayer2Name.value().trim() || "プレイヤー2";
     if (playerNames[2] === "") playerNames[2] = "プレイヤー2";
-
-    if(!gameOver) updateMessageDisplay();
+    if(!gameOver && gameState !== 'confirming') updateMessageDisplay(); // 確認中はメッセージを上書きしない
 }
-
-function isStoneAt(x, y) {
+function isStoneAt(x, y) { /* ... (変更なし) ... */ 
     return placedStones.some(stone => stone.x === x && stone.y === y);
 }
-
-function resetGame() {
+function resetGame() { /* ... (gameState, previewStoneの初期化追加) ... */ 
     placedStones = [];
     currentPlayer = 1;
     gameOver = false;
     highlightedStones = [];
     conicPath = null;
-    updatePlayerNames(); // 先に名前を更新
-    // メッセージエリアの初期化
+    gameState = 'placing'; // ★追加
+    previewStone = null;   // ★追加
+    updatePlayerNames(); 
     const currentPlayerColor = currentPlayer === 1 ? '#d9534f' : '#428bca';
     select('#messageArea').html(`次は <strong style="color:${currentPlayerColor}; font-weight:700;">${playerNames[currentPlayer]}</strong> の手番です`);
     loop();
 }
-
-function areThreePointsCollinear(p1, p2, p3) {
+function areThreePointsCollinear(p1, p2, p3) { /* ... (変更なし) ... */ 
     const area2 = p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y);
     return Math.abs(area2) < 1e-7;
 }
-
-function calculateCircleFrom3Points(p1, p2, p3) {
+function calculateCircleFrom3Points(p1, p2, p3) { /* ... (変更なし) ... */ 
     if (areThreePointsCollinear(p1, p2, p3)) return null;
-
     const D = 2 * (p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y));
     if (Math.abs(D) < 1e-9) return null;
-
     const p1sq = p1.x * p1.x + p1.y * p1.y;
     const p2sq = p2.x * p2.x + p2.y * p2.y;
     const p3sq = p3.x * p3.x + p3.y * p3.y;
-
     const centerX = (p1sq * (p2.y - p3.y) + p2sq * (p3.y - p1.y) + p3sq * (p1.y - p2.y)) / D;
     const centerY = (p1sq * (p3.x - p2.x) + p2sq * (p1.x - p3.x) + p3sq * (p2.x - p1.x)) / D;
     const radius = dist(p1.x, p1.y, centerX, centerY);
-
-    if (radius < 1e-4) return null; // 半径が小さすぎる場合は無効 (ほぼ点が重なっている)
-
+    if (radius < 1e-4) return null; 
     return { center: { x: centerX, y: centerY }, radius: radius };
 }
-
-// arePointsConcyclicOrCollinear と getCombinations は変更なし
-function arePointsConcyclicOrCollinear(p1, p2, p3, p4) {
+function arePointsConcyclicOrCollinear(p1, p2, p3, p4) { /* ... (変更なし) ... */ 
     const points = [p1, p2, p3, p4];
     const m = [];
-    for (const p of points) {
-        m.push([p.x * p.x + p.y * p.y, p.x, p.y, 1]);
-    }
+    for (const p of points) { m.push([p.x * p.x + p.y * p.y, p.x, p.y, 1]); }
     const det3x3 = (a,b,c, d,e,f, g,h,i) => a*(e*i - f*h) - b*(d*i - f*g) + c*(d*h - e*g);
     let det = 0;
     det += m[0][0] * det3x3(m[1][1], m[1][2], m[1][3], m[2][1], m[2][2], m[2][3], m[3][1], m[3][2], m[3][3]);
     det -= m[0][1] * det3x3(m[1][0], m[1][2], m[1][3], m[2][0], m[2][2], m[2][3], m[3][0], m[3][2], m[3][3]);
     det += m[0][2] * det3x3(m[1][0], m[1][1], m[1][3], m[2][0], m[2][1], m[2][3], m[3][0], m[3][1], m[3][3]);
     det -= m[0][3] * det3x3(m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2], m[3][0], m[3][1], m[3][2]);
-    const EPSILON = 1e-7;
-    return Math.abs(det) < EPSILON;
+    const EPSILON = 1e-7; return Math.abs(det) < EPSILON;
 }
-function getCombinations(arr, k) {
-    if (k < 0 || k > arr.length) return [];
-    if (k === 0) return [[]];
-    if (k === arr.length) return [arr];
-    if (k === 1) return arr.map(item => [item]);
+function getCombinations(arr, k) { /* ... (変更なし) ... */ 
+    if (k < 0 || k > arr.length) return []; if (k === 0) return [[]]; if (k === arr.length) return [arr]; if (k === 1) return arr.map(item => [item]);
     const combinations = [];
     function findCombinations(startIndex, currentCombination) {
-        if (currentCombination.length === k) {
-            combinations.push([...currentCombination]);
-            return;
-        }
+        if (currentCombination.length === k) { combinations.push([...currentCombination]); return; }
         if (startIndex >= arr.length) return;
-        currentCombination.push(arr[startIndex]);
-        findCombinations(startIndex + 1, currentCombination);
-        currentCombination.pop();
-        if (arr.length - (startIndex + 1) >= k - currentCombination.length) {
-            findCombinations(startIndex + 1, currentCombination);
-        }
+        currentCombination.push(arr[startIndex]); findCombinations(startIndex + 1, currentCombination); currentCombination.pop();
+        if (arr.length - (startIndex + 1) >= k - currentCombination.length) findCombinations(startIndex + 1, currentCombination);
     }
-    findCombinations(0, []);
-    return combinations;
+    findCombinations(0, []); return combinations;
 }

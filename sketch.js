@@ -44,7 +44,7 @@ function preload() {
     // Ensure this image file is in the SAME FOLDER as index.html and sketch.js.
     // Example: If your image is IMG_0161.PNG, use loadImage('IMG_0161.PNG');
     stoneDisplayImage = loadImage(
-        'stone.png', 
+        'stone1.png', 
         () => {
             console.log("SUCCESS: Stone image ('stone1.png') loaded successfully!");
         }, 

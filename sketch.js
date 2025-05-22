@@ -1,6 +1,6 @@
 // --- 定数定義 ---
 // (変更なし)
-const GRID_DIVISIONS = 10;
+const GRID_DIVISIONS = 11;
 const CELL_SIZE = 35;
 const DOT_RADIUS = CELL_SIZE * 0.42;
 const STONE_COLOR = [35, 35, 35, 255];
